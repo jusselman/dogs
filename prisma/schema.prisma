@@ -1,0 +1,214 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Enum for service types (dogs now, handyman later)
+enum ServiceType {
+  DOG_WALKING
+  HANDYMAN
+}
+
+// Enum for appointment status
+enum AppointmentStatus {
+  PENDING       // New client awaiting approval
+  CONFIRMED     // Approved and scheduled
+  COMPLETED     // Walk/service completed
+  CANCELLED     // Cancelled by client or walker
+  REJECTED      // Walker rejected the request
+}
+
+// Enum for user roles
+enum UserRole {
+  CLIENT
+  WALKER
+  ADMIN
+}
+
+// Enum for appointment recurrence
+enum RecurrenceType {
+  NONE
+  DAILY
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+}
+
+// User/Client model
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  password      String   // Will be hashed
+  name          String
+  phone         String
+  address       String
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  role          UserRole @default(CLIENT)
+  approved      Boolean  @default(false) // New clients start as not approved
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relations
+  dogs          Dog[]
+  appointments  Appointment[]
+  messages      Message[]
+  
+  @@index([email])
+}
+
+// Dog profile model
+model Dog {
+  id              String   @id @default(cuid())
+  name            String
+  breed           String
+  age             Int      // in years
+  weight          Float    // in pounds
+  sex             String   // "Male", "Female"
+  neutered        Boolean
+  
+  // Health information
+  vetName         String?
+  vetClinic       String?
+  vetPhone        String?
+  vaccinationStatus String? // e.g., "Up to date", "Due soon"
+  medications     String?  // Text field for listing meds
+  allergies       String?
+  medicalConditions String?
+  specialNeeds    String?
+  
+  // Behavior information
+  temperament     String?  // e.g., "Friendly", "Shy", "Anxious"
+  behavioralIssues String? // Any aggression, reactivity, etc.
+  leashManners    String?
+  socialization   String?  // How they are with other dogs/people
+  triggers        String?  // Things to avoid
+  
+  // Daily routine
+  feedingSchedule String?
+  pottyHabits     String?
+  walkPreferences String?
+  houseRules      String?
+  accessInstructions String? // How to access home, keys, codes, etc.
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relations
+  owner           User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  ownerId         String
+  appointments    Appointment[]
+  
+  @@index([ownerId])
+}
+
+// Appointment/Walk model (works for both dog-walking and handyman)
+model Appointment {
+  id              String            @id @default(cuid())
+  serviceType     ServiceType       @default(DOG_WALKING)
+  status          AppointmentStatus @default(PENDING)
+  
+  // Scheduling
+  startTime       DateTime
+  endTime         DateTime
+  duration        Int               // in minutes, typically 30
+  
+  // Recurring appointments
+  isRecurring     Boolean           @default(false)
+  recurrenceType  RecurrenceType    @default(NONE)
+  recurrenceEndDate DateTime?       // When recurring appointments should stop
+  parentAppointmentId String?       // Links to parent if this is a recurring instance
+  parentAppointment   Appointment?  @relation("RecurringAppointments", fields: [parentAppointmentId], references: [id], onDelete: Cascade)
+  recurringInstances  Appointment[] @relation("RecurringAppointments")
+  
+  // Pricing
+  price           Float?            // Walker determines based on dog size/breed
+  priceNotes      String?           // Reasoning for price (size surcharge, etc.)
+  
+  // Notes
+  notes           String?           // Any special instructions or notes
+  walkerNotes     String?           // Private notes from walker
+  
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  
+  // Relations (for dog-walking service)
+  client          User?             @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  clientId        String?
+  dog             Dog?              @relation(fields: [dogId], references: [id], onDelete: Cascade)
+  dogId           String?
+  
+  // For handyman service (future)
+  handymanServiceDescription String? // What handyman work is needed
+  handymanLocation String?           // Where the handyman work will be done
+  
+  @@index([startTime])
+  @@index([clientId])
+  @@index([dogId])
+  @@index([serviceType])
+  @@index([status])
+}
+
+// Blocked time slots (for walker to block out unavailable times)
+model BlockedTimeSlot {
+  id          String      @id @default(cuid())
+  startTime   DateTime
+  endTime     DateTime
+  reason      String?     // Optional: "Handyman work", "Personal time", etc.
+  serviceType ServiceType? // Which service this blocks (null = blocks all)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  
+  @@index([startTime])
+  @@index([endTime])
+}
+
+// Message/Email model (for client-walker communication)
+model Message {
+  id          String   @id @default(cuid())
+  subject     String?
+  body        String
+  fromEmail   String
+  toEmail     String
+  isRead      Boolean  @default(false)
+  sentAt      DateTime @default(now())
+  
+  // Relations
+  sender      User?    @relation(fields: [senderId], references: [id], onDelete: SetNull)
+  senderId    String?
+  
+  @@index([sentAt])
+  @@index([toEmail])
+}
+
+// Walker settings/info (single row for the one walker)
+model WalkerSettings {
+  id                  String   @id @default(cuid())
+  businessName        String   @default("Dogs")
+  businessEmail       String
+  businessPhone       String
+  businessAddress     String?
+  
+  // Pricing defaults
+  basePriceFor30Min   Float    @default(25.00)
+  largeDogSurcharge   Float    @default(10.00)
+  largeDogWeightThreshold Float @default(70.00) // lbs
+  
+  // Scheduling settings
+  defaultWalkDuration Int      @default(30) // minutes
+  minAdvanceBookingHours Int   @default(48) // 48 hour minimum notice
+  maxDogsPerSlot      Int      @default(4)  // Maximum dogs at one time
+  
+  // Business hours (stored as JSON for flexibility)
+  businessHours       Json?    // e.g., {"monday": {"start": "8:00", "end": "18:00"}, ...}
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
